@@ -1,0 +1,21 @@
+?start: term
+
+?type: NAT
+     | NAME -> type_var
+     | NAME type+ -> type_constructor
+     | type "->" type -> type_func
+     | "(" NAME ":" type ")" "->" type -> dependant_type
+     | "(" type ")"
+
+?term: NAME -> var
+     | "\\" NAME ":" type "." term -> abstraction
+     | term term -> application
+     | NAT
+     | "|" NAME ":" term "." term -> dependant_abstraction
+     | "(" term ")"
+     | "?" -> wildcard
+
+NAT: /\d+/
+NAME: /[a-zA-Z_]\w*/
+
+%ignore /\s+/
