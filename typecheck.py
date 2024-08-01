@@ -1,54 +1,55 @@
-from typing import Optional, overload
+from typing import Optional, overload, TypeAlias, Union
 from abc import ABC, abstractmethod
 
-type Type = TypeVar | TypeConstructor | DependantType | Nat
+Term: TypeAlias = Union[
+  'Var',
+  'TypeConstructor',
+  'DependantType',
+  'Nat',
+  'Abstraction',
+  'Application',
+  'WildCard',
+]
 
-class TypeVar:
-    var_count = 0
-    def __init__(self, name: Optional[str] = None) -> None:
-        if name is None:
-            TypeVar.var_count += 1
-            name = f"t{TypeVar.var_count}"
-        self.name = name
-    def __repr__(self) -> str:
-        return self.name
-
-class TypeConstructor:
-    def __init__(self, name: str, args: list[Type] = []) -> None:
-        self.name = name
-        self.args = args
-    def __repr__(self) -> str:
-        if self.name == "->":
-            return f"{self.args[0]} -> {self.args[1]}"
-        args = "".join([f" {a}" for a in self.args])
-        return f"{self.name}{args}"
-    
-class DependantType:
-    def __init__(self, param: str, type: Type, body: Type) -> None:
-        self.param = param
-        self.type = type
-        self.body = body
-    def __repr__(self) -> str:
-        return f"({self.param} : {self.type}) -> {self.body}"
-
-type Term = Nat | Abstraction | Application | DependantAbstraction | WildCard
-
-type InferenceResult = tuple['Substitution', Type] | str
+InferenceResult: TypeAlias = tuple['Substitution', Term] | str
 
 class Inferrable(ABC):
     @abstractmethod
     def infer(self, context: 'Context') -> InferenceResult: ...
 
+class TypeConstructor(Inferrable):
+    def __init__(self, name: str, args: list[Term] = []) -> None:
+        self.name = name
+        self.args = args
+    def infer(self, context: 'Context') -> InferenceResult:
+        if not context.mapping.get(self.name):
+          return "not found: " + self.name
+        return Substitution(), context.mapping[self.name]
+    def __repr__(self) -> str:
+        if self.name == "->":
+            l = str(self.args[0])
+            r = str(self.args[1])
+            if " " in l: l = f"({l})"
+            if " " in r: r = f"({r})"
+            return f"{l} -> {r}"
+        args = "".join([f" {a}" for a in self.args])
+        return f"{self.name}{args}"
+    
 class Nat(Inferrable):
     def __init__(self, value: int) -> None:
         self.value = value
     def infer(self, context: 'Context') -> InferenceResult:
+        context = context
         return Substitution(), TypeConstructor("Nat")
     def __repr__(self) -> str:
         return f"{self.value}"
 
 class Var(Inferrable):
-    def __init__(self, name: str) -> None:
+    var_count = 0
+    def __init__(self, name: Optional[str] = None) -> None:
+        if not name:
+            Var.var_count += 1
+            name = f"t{Var.var_count}"
         self.name = name
     def infer(self, context: 'Context') -> InferenceResult:
         if self.name in context.mapping:
@@ -58,7 +59,7 @@ class Var(Inferrable):
         return self.name
 
 class Abstraction(Inferrable):
-    def __init__(self, param: str, type: Type, body: Term) -> None:
+    def __init__(self, param: str, type: Term, body: Term) -> None:
         self.param = param
         self.type = type
         self.body = body
@@ -83,16 +84,20 @@ class Application(Inferrable):
         result = self.arg.infer(context)
         if isinstance(result, str): return result
         s2, t2 = result
-        beta = TypeVar()
+        beta = Var()
         fn = TypeConstructor("->", [t2, beta])
         s3 = unify(t1, fn)
         if s3 is None:
             return f"Failed unification of function types: '{t1}' and '{fn}'"
         return s3(s2(s1)), s3(beta)
     def __repr__(self):
-        return f"({self.func} {self.arg})"
+        f = str(self.func)
+        a = str(self.arg)
+        if " " in a:
+          a = f"({a})"
+        return f"{f} {a}"
 
-class DependantAbstraction(Inferrable):
+class DependantType(Inferrable):
     def __init__(self, param: str, term: Term, body: Term) -> None:
         self.param = param
         self.term = term
@@ -114,19 +119,20 @@ class WildCard(Inferrable):
     def __init__(self):
         pass
     def infer(self, context: 'Context') -> InferenceResult:
-        return Substitution(), TypeVar()
+        context = context
+        return Substitution(), Var()
     def __repr__(self):
         return "?"
 
 class Substitution:
-    def __init__(self, mapping: dict[str, Type] = {}) -> None:
+    def __init__(self, mapping: dict[str, Term] = {}) -> None:
         self.mapping = mapping
     @overload
-    def __call__(self, x: Type) -> Type: ...
+    def __call__(self, x: Term) -> Term: ...
     @overload
     def __call__(self, x: 'Substitution') -> 'Substitution': ...
     def __call__(self, x):
-        if isinstance(x, TypeVar):
+        if isinstance(x, Var):
             if x.name in self.mapping:
                 return self.mapping[x.name]
             return x
@@ -134,11 +140,13 @@ class Substitution:
             args = [self(a) for a in x.args]
             return TypeConstructor(x.name, args)
         if isinstance(x, DependantType):
-            type = self(x.type)
+            type = self(x.term)
             body = self(x.body)
             return DependantType(x.param, type, body)
         if isinstance(x, Nat):
             return x
+        if isinstance(x, Application):
+            return Application(self(x.func), self(x.arg))
         if isinstance(x, Substitution):
             s = self.mapping.copy()
             for k, v in x.mapping.items():
@@ -153,7 +161,11 @@ class Substitution:
         return s + ")"
 
 class Context:
-    def __init__(self, mapping: dict[str, Type]) -> None:
+    def __init__(self, mapping: dict[str, Term]) -> None:
+        mapping["Nat"] = TypeConstructor("Type", [])
+        mapping["true"] = TypeConstructor("Bool")
+        mapping["false"] = TypeConstructor("Bool")
+        mapping["Bool"] = TypeConstructor("Type")
         self.mapping = mapping
     def __repr__(self) -> str:
         s = "T("
@@ -164,14 +176,14 @@ class Context:
         return s + ")"
     
 
-def unify(t1: Type, t2: Type) -> Substitution | None:
+def unify(t1: Term, t2: Term) -> Substitution | None:
     if isinstance(t2, WildCard) or isinstance(t1, WildCard):
         return Substitution()
-    if isinstance(t1, TypeVar) and isinstance(t2, TypeVar) and t1.name == t2.name:
+    if isinstance(t1, Var) and isinstance(t2, Var) and t1.name == t2.name:
         return Substitution()
-    if isinstance(t2, TypeVar):
+    if isinstance(t2, Var):
         return Substitution({t2.name: t1})
-    if isinstance(t1, TypeVar):
+    if isinstance(t1, Var):
         return unify(t2, t1)
     if isinstance(t1, TypeConstructor) and isinstance(t2, TypeConstructor):
         if t1.name != t2.name: return None
@@ -184,7 +196,7 @@ def unify(t1: Type, t2: Type) -> Substitution | None:
         return s
     if isinstance(t1, DependantType) and isinstance(t2, DependantType):
         s = {}
-        result = unify(t1.type, t2.type)
+        result = unify(t1.term, t2.term)
         if result is None: return None
         s |= result.mapping
         result = unify(t1.body, t2.body)
@@ -194,4 +206,16 @@ def unify(t1: Type, t2: Type) -> Substitution | None:
     if isinstance(t1, Nat) and isinstance(t2, Nat):
         if t1.value != t2.value: return None
         return Substitution()
+    if isinstance(t1, Abstraction) and isinstance(t2, Abstraction):        return unify(t1.body, t2.body)
+    if isinstance(t1, Application) and isinstance(t2, Application):
+        s = Substitution()
+        result = unify(t1.func, t2.func)
+        if result is None: return None
+        s = result(s)
+        result = unify(t1.arg, t2.arg)
+        if result is None: return None
+        s = result(s)
+        return s
+
+        
     return None

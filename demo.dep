@@ -1,0 +1,12 @@
+
+data Nat : Type where
+  zero : Nat
+  succ : Nat -> Nat
+end
+
+data Vec (a : Type) (n : Nat) : Nat where
+  nil : Vec a zero
+  cons: a -> Vec a n -> Vec a (succ n)
+end
+
+
